@@ -3,6 +3,7 @@ from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 import os
+import time
 
 app = FastAPI()
 
@@ -13,15 +14,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2026 Stable Model for Image Upscaling
-# Ye model Hugging Face par active rehta hai
-MODEL_ID = "stabilityai/stable-diffusion-x4-upscaler"
+# 100% Active Model for Image Restoration (Tencent-ARC)
+MODEL_ID = "TencentARC/GFPGAN"
 API_URL = f"https://router.huggingface.co/hf-inference/models/{MODEL_ID}"
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 @app.get("/")
 def home():
-    return {"status": "Online", "active_model": MODEL_ID}
+    return {"status": "Online", "model": MODEL_ID, "info": "Use /enhance to upscale"}
 
 @app.post("/enhance")
 async def enhance_image(file: UploadFile = File(...)):
@@ -29,26 +29,24 @@ async def enhance_image(file: UploadFile = File(...)):
         return {"error": "HF_TOKEN missing in Vercel settings"}
 
     image_bytes = await file.read()
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     
-    # Headers for Image Binary Data
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-    }
-    
-    try:
-        # Request to Hugging Face
-        response = requests.post(API_URL, headers=headers, data=image_bytes, timeout=60)
+    # Retry mechanism agar model load ho raha ho
+    max_retries = 3
+    for i in range(max_retries):
+        response = requests.post(API_URL, headers=headers, data=image_bytes)
         
         if response.status_code == 200:
             return Response(content=response.content, media_type="image/png")
         elif response.status_code == 503:
-            return {"error": "Model is starting up. Retry in 30 seconds."}
+            # Model warm up ho raha hai, thoda wait karein
+            time.sleep(10)
+            continue
         else:
-            # Error Details dikhayega taaki hum samajh sakein kya hua
             return {
                 "error": "HF API Issue",
                 "status": response.status_code,
-                "msg": response.text[:200]
+                "msg": response.json() if response.headers.get('content-type') == 'application/json' else "Model Error"
             }
-    except Exception as e:
-        return {"error": str(e)}
+            
+    return {"error": "Model took too long to load. Try again now."}
